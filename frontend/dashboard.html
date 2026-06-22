@@ -2765,6 +2765,7 @@ var _toolsSampling = null;  // 缓存采样完整参数，翻转 enabled 时原�
 async function loadToolsPanel() {
   _toolsMsg('读取状态…');
   var raw = {};
+  var errs = [];
   try {
     var r1 = await authFetch('/api/settings/sampling');
     if (r1 && r1.ok) {
@@ -2773,7 +2774,7 @@ async function loadToolsPanel() {
       _setSwitch('sw-sampling', 'led-sampling', !!s.enabled);
       raw.sampling = s;
     }
-  } catch (e) {}
+  } catch (e) { errs.push('采样配置: ' + (e.message || e)); }
   try {
     var r2 = await authFetch('/api/tunnel/status');
     if (r2 && r2.ok) {
@@ -2781,10 +2782,11 @@ async function loadToolsPanel() {
       _setSwitch('sw-tunnel', 'led-tunnel', !!t.running);
       raw.tunnel = { running: t.running, token_set: t.token_set, auto_start: t.auto_start, last_error: t.last_error || '' };
     }
-  } catch (e) {}
+  } catch (e) { errs.push('隧道状态: ' + (e.message || e)); }
   var pre = document.getElementById('tools-raw');
   if (pre) pre.textContent = JSON.stringify(raw, null, 2);
-  _toolsMsg('');
+  if (errs.length) _toolsMsg('部分状态读取失败 — ' + errs.join('；'), 'err');
+  else _toolsMsg('');
 }
 
 async function toolToggleSampling() {
@@ -4367,7 +4369,10 @@ async function loadGithubStatus() {
         document.getElementById('gh-st-error').textContent = d.last_error;
       } else { errRow.style.display = 'none'; }
     }
-  } catch(e) {}
+  } catch(e) {
+    var m = document.getElementById('gh-msg');
+    if (m) { m.style.color = 'var(--negative)'; m.textContent = '加载 GitHub 状态失败: ' + (e.message || e); }
+  }
 }
 
 async function saveGithubConfig() {
@@ -4385,7 +4390,7 @@ async function saveGithubConfig() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({token, repo, branch, path_prefix: prefix, auto_interval_minutes: autoInterval}),
     });
-    var d = await res.json();
+    var d = await readJsonSafe(res);
     if (d.ok) {
       msg.innerHTML = _SV.ok + ' 配置已保存';
       msg.style.color = 'var(--success, green)';
@@ -4395,7 +4400,7 @@ async function saveGithubConfig() {
       msg.innerHTML = _SV.err + ' ' + esc(d.error || '保存失败');
       msg.style.color = 'var(--accent)';
     }
-  } catch(e) { msg.innerHTML = _SV.err + ' 网络错误'; msg.style.color = 'var(--accent)'; }
+  } catch(e) { msg.innerHTML = _SV.err + ' ' + esc(e.message || '网络错误'); msg.style.color = 'var(--negative)'; }
 }
 
 async function validateGithub() {
@@ -4403,7 +4408,7 @@ async function validateGithub() {
   msg.textContent = '验证中…'; msg.style.color = '';
   try {
     var res = await authFetch('/api/github/validate', {method: 'POST'});
-    var d = await res.json();
+    var d = await readJsonSafe(res);
     if (d.ok) {
       msg.innerHTML = _SV.ok + ' 连接成功：' + esc(d.repo_full_name) + (d.private ? '（私有）' : '（公开）');
       msg.style.color = 'var(--success, green)';
@@ -4411,7 +4416,7 @@ async function validateGithub() {
       msg.innerHTML = _SV.err + ' ' + esc(d.error || '验证失败');
       msg.style.color = 'var(--accent)';
     }
-  } catch(e) { msg.innerHTML = _SV.err + ' 网络错误'; msg.style.color = 'var(--accent)'; }
+  } catch(e) { msg.innerHTML = _SV.err + ' ' + esc(e.message || '网络错误'); msg.style.color = 'var(--negative)'; }
 }
 
 async function runGithubSync() {
@@ -4421,7 +4426,7 @@ async function runGithubSync() {
   msg.textContent = '正在上传 bucket 文件到 GitHub…'; msg.style.color = '';
   try {
     var res = await authFetch('/api/github/sync', {method: 'POST'});
-    var d = await res.json();
+    var d = await readJsonSafe(res);
     if (d.ok) {
       msg.innerHTML = _SV.ok + ' 同步完成，上传 ' + d.uploaded + ' 个文件';
       msg.style.color = 'var(--success, green)';
@@ -4430,7 +4435,7 @@ async function runGithubSync() {
       msg.innerHTML = _SV.err + ' ' + esc(d.error || '同步失败');
       msg.style.color = 'var(--accent)';
     }
-  } catch(e) { msg.innerHTML = _SV.err + ' 网络错误'; msg.style.color = 'var(--accent)'; }
+  } catch(e) { msg.innerHTML = _SV.err + ' ' + esc(e.message || '网络错误'); msg.style.color = 'var(--negative)'; }
   btn.disabled = false; btn.textContent = '立即同步 ↑';
 }
 
@@ -4883,17 +4888,19 @@ async function pollImportStatus() {
   clearInterval(importPollTimer);
   try {
     const res = await fetch(BASE + '/api/import/status');
-    const s = await res.json();
+    const s = await res.json().catch(() => null);
+    if (!s) { alert('导入状态读取失败（服务器响应非 JSON）'); return; }
     updateImportUI(s);
     if (s.status === 'running') {
       importPollTimer = setInterval(async () => {
         try {
           const r2 = await fetch(BASE + '/api/import/status');
-          updateImportUI(await r2.json());
+          const s2 = await r2.json().catch(() => null);
+          if (s2) updateImportUI(s2);
         } catch(e) {}
       }, 2000);
     }
-  } catch(e) {}
+  } catch(e) { alert('导入状态加载失败: ' + (e.message || e)); }
 }
 
 function updateImportUI(s) {
@@ -4920,7 +4927,7 @@ function updateImportUI(s) {
 }
 
 async function pauseImport() {
-  try { await fetch(BASE + '/api/import/pause', { method: 'POST' }); } catch(e) {}
+  try { await fetch(BASE + '/api/import/pause', { method: 'POST' }); } catch(e) { alert('暂停失败: ' + (e.message || e)); }
 }
 
 async function loadImportResults() {
@@ -4985,7 +4992,7 @@ async function reviewAction(bid, action) {
     // Remove card from UI
     const card = document.getElementById('ir-' + bid);
     if (card) card.style.display = 'none';
-  } catch(e) {}
+  } catch(e) { alert('操作失败: ' + (e.message || e)); }
 }
 
 async function batchReview(idsJson, action) {
@@ -4996,7 +5003,7 @@ async function batchReview(idsJson, action) {
       body: JSON.stringify({ decisions: ids.map(id => ({ bucket_id: id, action })) })
     });
     detectPatterns();
-  } catch(e) {}
+  } catch(e) { alert('批量操作失败: ' + (e.message || e)); }
 }
 
 // ========================================
