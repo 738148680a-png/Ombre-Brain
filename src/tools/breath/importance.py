@@ -10,13 +10,13 @@ tools/breath/importance.py — importance_min 模式
 关键行为：
 - 列出所有非 feel/plan/letter、未主动遗忘、且 importance >= 阈值 的桶
 - tags 过滤同样生效（AND）
-- 按 importance 降序，截到 20 条，逐条 dehydrate 后塞进 max_tokens 预算
+- 按 importance 降序，截到 max_results 条，逐条 dehydrate 后塞进 max_tokens 预算
 
 不做什么（边界）：
 - 不做向量检索（这是「按重要度批量拉」而不是「找相似」）
 - 不主动 touch（浮现行为不应重置衰减计时器）
 
-对外暴露：surface_by_importance(importance_min, max_tokens, tag_filter) → str
+对外暴露：surface_by_importance(importance_min, max_tokens, max_results, tag_filter) → str
 ========================================
 """
 
@@ -31,7 +31,7 @@ def _bucket_has_tags(meta: dict, tag_filter: list) -> bool:
     return all(t in bucket_tags for t in tag_filter)
 
 
-async def surface_by_importance(importance_min: int, max_tokens: int, tag_filter: list) -> str:
+async def surface_by_importance(importance_min: int, max_tokens: int, max_results: int, tag_filter: list) -> str:
     try:
         all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
     except Exception as e:
@@ -44,7 +44,7 @@ async def surface_by_importance(importance_min: int, max_tokens: int, tag_filter
         and _bucket_has_tags(b.get("metadata", {}), tag_filter)
     ]
     filtered.sort(key=lambda b: int(b.get("metadata", {}).get("importance") or 0), reverse=True)
-    filtered = filtered[:20]
+    filtered = filtered[:max_results]
     if not filtered:
         return f"没有重要度 >= {importance_min} 的记忆。"
     results = []
@@ -64,11 +64,12 @@ async def surface_by_importance(importance_min: int, max_tokens: int, tag_filter
                     summary = strip_wikilinks(b["content"])[:300].strip() or "（空记忆）"
                 else:
                     continue
-            t = count_tokens_approx(summary)
+            imp = b["metadata"].get("importance", 0)
+            entry = f"[importance:{imp}] [bucket_id:{b['id']}] {summary}"
+            t = count_tokens_approx(entry)
             if token_used + t > max_tokens:
                 break
-            imp = b["metadata"].get("importance", 0)
-            results.append(f"[importance:{imp}] [bucket_id:{b['id']}] {summary}")
+            results.append(entry)
             token_used += t
         except Exception as e:
             rt.logger.warning(f"importance_min bucket processing failed: {e}")

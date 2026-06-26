@@ -59,8 +59,8 @@ async def dispatch(
     await rt.decay_engine.ensure_started()
 
     surfacing_cfg = rt.config.get("surfacing", {}) or {}
-    default_results = int(surfacing_cfg.get("breath_max_results") or 20)
-    default_tokens = int(surfacing_cfg.get("breath_max_tokens") or 10000)
+    default_results = int(surfacing_cfg.get("max_buckets") or surfacing_cfg.get("breath_max_results") or 20)
+    default_tokens = int(surfacing_cfg.get("max_tokens") or surfacing_cfg.get("breath_max_tokens") or 10000)
     if max_results <= 0:
         max_results = default_results
     if max_tokens <= 0:
@@ -83,6 +83,7 @@ async def dispatch(
         return await surface_by_importance(
             importance_min=importance_min,
             max_tokens=max_tokens,
+            max_results=max_results,
             tag_filter=tag_filter,
         )
 

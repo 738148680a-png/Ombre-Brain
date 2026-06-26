@@ -1,0 +1,16 @@
+[Unit]
+Description=Ombre Brain MCP server
+After=network.target
+
+[Service]
+Type=simple
+User=ccpanel
+Group=ccpanel
+WorkingDirectory=/opt/ombre-brain
+EnvironmentFile=/opt/ombre-brain/.env
+ExecStart=/opt/ombre-brain/.venv/bin/python src/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

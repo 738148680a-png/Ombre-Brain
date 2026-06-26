@@ -132,9 +132,17 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     scored_with_cold = cold_start + scored_deduped
 
     # --- 按 token 预算浮现，加权采样 / 随机洗牌 + 硬上限 ---
+    bounded_pinned_results = []
     token_budget = max_tokens
     for r in pinned_results:
-        token_budget -= count_tokens_approx(r)
+        if len(bounded_pinned_results) >= max_results:
+            break
+        cost = count_tokens_approx(r)
+        if cost > token_budget:
+            break
+        bounded_pinned_results.append(r)
+        token_budget -= cost
+    pinned_results = bounded_pinned_results
 
     candidates = list(scored_with_cold)
     sampling_cfg = surfacing_cfg.get("sampling", {}) or {}
@@ -184,7 +192,8 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             random.shuffle(pool)
             non_cold = top1 + pool + non_cold[min(20, len(non_cold)):]
         candidates = cold_start + non_cold
-    candidates = candidates[:max_results]
+    remaining_slots = max(0, max_results - len(pinned_results))
+    candidates = candidates[:remaining_slots]
 
     dynamic_results = []
     for b in candidates:
@@ -197,6 +206,9 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             if summary_tokens > token_budget:
                 break
             score = rt.decay_engine.calculate_score(b["metadata"])
+            summary_tokens = count_tokens_approx(f"{score:.2f} {b['id']} {summary}")
+            if summary_tokens > token_budget:
+                break
             dynamic_results.append(f"[权重:{score:.2f}] [bucket_id:{b['id']}] {summary}")
             token_budget -= summary_tokens
         except Exception as e:
@@ -245,12 +257,17 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                     cond_b = False
             if cond_a or cond_b:
                 passive_pool.append(b)
-        if passive_pool:
+        remaining_slots = max(0, max_results - len(pinned_results) - len(dynamic_results))
+        if passive_pool and remaining_slots > 0 and token_budget > 0:
             random.shuffle(passive_pool)
-            for b in passive_pool[:2]:
+            for b in passive_pool[:min(2, remaining_slots)]:
                 try:
                     clean_meta = {k: v for k, v in b["metadata"].items() if k != "tags"}
                     summary = await rt.dehydrator.dehydrate(strip_wikilinks(b["content"]), clean_meta)
+                    cost = count_tokens_approx(f"{b['id']} {summary}")
+                    if cost > token_budget:
+                        break
+                    token_budget -= cost
                     passive_results.append(f"💤 [久未浮现] [bucket_id:{b['id']}] {summary}")
                 except Exception as e:
                     rt.logger.warning(f"passive association dehydrate failed: {e}")
@@ -261,7 +278,8 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     # 设计意图：让已解决的记忆有小概率重新出现，制造"忽然想起"的温度。
     # 与无结果兜底逻辑并存；不替换主流程。
     dream_results: list[str] = []
-    if random.random() < 0.03:
+    remaining_slots = max(0, max_results - len(pinned_results) - len(dynamic_results) - len(passive_results))
+    if remaining_slots > 0 and token_budget > 0 and random.random() < 0.03:
         try:
             shown_ids = {b["id"] for b in candidates}
             resolved_pool = [
@@ -273,10 +291,14 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             ]
             if resolved_pool:
                 random.shuffle(resolved_pool)
-                for b in resolved_pool[:3]:
+                for b in resolved_pool[:min(3, remaining_slots)]:
                     try:
                         clean_meta = {k: v for k, v in b["metadata"].items() if k != "tags"}
                         summary = await rt.dehydrator.dehydrate(strip_wikilinks(b["content"]), clean_meta)
+                        cost = count_tokens_approx(f"{b['id']} {summary}")
+                        if cost > token_budget:
+                            break
+                        token_budget -= cost
                         dream_results.append(f"✨ [偶遇] [bucket_id:{b['id']}] {summary}")
                         rt.logger.info(f"Dream surface triggered / 偶遇机制触发: {b['id']}")
                     except Exception as e:

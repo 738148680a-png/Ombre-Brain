@@ -33,7 +33,7 @@ async def surface_feels(max_tokens: int) -> str:
             return "没有留下过 feel。"
         full_lines: list[str] = []
         collapsed_lines: list[str] = []
-        used = 0
+        used = count_tokens_approx("feel history")
         for f in feels:
             created = f["metadata"].get("created", "")
             full_text = strip_wikilinks(f["content"])
@@ -44,6 +44,10 @@ async def surface_feels(max_tokens: int) -> str:
                 used += cost
             else:
                 snippet = full_text.replace("\n", " ").strip()[:60]
+                collapsed_cost = count_tokens_approx(f"{created[:10]} {f['id']} {snippet}")
+                if used + collapsed_cost > max_tokens:
+                    break
+                used += collapsed_cost
                 collapsed_lines.append(
                     f"[{created[:10]}] [bucket_id:{f['id']}] {snippet}…"
                 )

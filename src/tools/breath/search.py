@@ -86,6 +86,8 @@ async def surface_search(
     results = []
     token_used = 0
     for bucket in matches:
+        if len(results) >= max_results:
+            break
         if token_used >= max_tokens:
             break
         try:
@@ -107,6 +109,9 @@ async def surface_search(
                 summary = f"[语义关联] [bucket_id:{bucket['id']}] {summary}"
             else:
                 summary = f"[bucket_id:{bucket['id']}] {summary}"
+            summary_tokens = count_tokens_approx(summary)
+            if token_used + summary_tokens > max_tokens:
+                break
             results.append(summary)
             token_used += summary_tokens
         except Exception as e:
@@ -117,7 +122,7 @@ async def surface_search(
             continue
 
     # --- 检索结果 < 3 时 40% 概率随机浮现 ---
-    if len(matches) < 3 and random.random() < 0.4:
+    if len(matches) < 3 and len(results) < max_results and token_used < max_tokens and random.random() < 0.4:
         try:
             all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
             matched_ids = {b["id"] for b in matches}
@@ -128,13 +133,21 @@ async def surface_search(
                 and rt.decay_engine.calculate_score(b["metadata"]) < 2.0
             ]
             if low_weight:
-                drifted = random.sample(low_weight, min(random.randint(1, 3), len(low_weight)))
+                drifted = random.sample(low_weight, min(random.randint(1, 3), max_results - len(results), len(low_weight)))
                 drift_results = []
+                drift_prefix = "--- Random surfacing ---\n"
+                drift_tokens = count_tokens_approx(drift_prefix)
                 for b in drifted:
                     clean_meta = {k: v for k, v in b["metadata"].items() if k != "tags"}
                     summary = await rt.dehydrator.dehydrate(strip_wikilinks(b["content"]), clean_meta)
-                    drift_results.append(f"[surface_type: random]\n{summary}")
-                results.append("--- 忽然想起来 ---\n" + "\n---\n".join(drift_results))
+                    entry = f"[surface_type: random]\n{summary}"
+                    entry_tokens = count_tokens_approx(entry)
+                    if token_used + drift_tokens + entry_tokens > max_tokens:
+                        break
+                    drift_results.append(entry)
+                    drift_tokens += entry_tokens
+                if drift_results:
+                    results.append(drift_prefix + "\n---\n".join(drift_results))
         except Exception as e:
             rt.logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
 
